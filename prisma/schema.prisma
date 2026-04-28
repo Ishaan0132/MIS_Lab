@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model BugReport {
+  id                              String   @id
+  title                           String
+  description                     String?
+  severity                        String   @default("MEDIUM")
+  status                          String   @default("OPEN")
+  reportedBy                      String
+  assignedTo                      String?
+  gameId                          String?
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime
+  Game                            Game?    @relation(fields: [gameId], references: [id])
+  User_BugReport_assignedToToUser User?    @relation("BugReport_assignedToToUser", fields: [assignedTo], references: [id])
+  User_BugReport_reportedByToUser User     @relation("BugReport_reportedByToUser", fields: [reportedBy], references: [id])
+}
+
+model Game {
+  id          String      @id
+  title       String
+  genre       String
+  releaseDate DateTime?
+  status      String      @default("ACTIVE")
+  playerCount Int         @default(0)
+  createdAt   DateTime    @default(now())
+  BugReport   BugReport[]
+  Purchase    Purchase[]
+}
+
+model Player {
+  id            String     @id
+  username      String     @unique
+  email         String     @unique
+  level         Int        @default(1)
+  xp            Int        @default(0)
+  totalPlayTime Int        @default(0)
+  lastLogin     DateTime?
+  status        String     @default("ACTIVE")
+  createdAt     DateTime   @default(now())
+  Purchase      Purchase[]
+}
+
+model Purchase {
+  id        String   @id
+  playerId  String
+  gameId    String
+  itemType  String
+  itemName  String
+  amount    Float
+  currency  String   @default("USD")
+  status    String   @default("COMPLETED")
+  createdAt DateTime @default(now())
+  Game      Game     @relation(fields: [gameId], references: [id])
+  Player    Player   @relation(fields: [playerId], references: [id])
+}
+
+model Report {
+  id          String   @id
+  title       String
+  type        String
+  format      String   @default("PDF")
+  generatedBy String
+  data        String
+  createdAt   DateTime @default(now())
+  User        User     @relation(fields: [generatedBy], references: [id])
+}
+
+model Server {
+  id          String    @id
+  name        String
+  region      String
+  status      String    @default("ONLINE")
+  playerCount Int       @default(0)
+  maxPlayers  Int       @default(1000)
+  cpuUsage    Float     @default(0)
+  memoryUsage Float     @default(0)
+  lastPing    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime
+}
+
+model User {
+  id                                   String      @id
+  email                                String      @unique
+  password                             String
+  name                                 String?
+  role                                 String      @default("DEVELOPER")
+  createdAt                            DateTime    @default(now())
+  updatedAt                            DateTime
+  BugReport_BugReport_assignedToToUser BugReport[] @relation("BugReport_assignedToToUser")
+  BugReport_BugReport_reportedByToUser BugReport[] @relation("BugReport_reportedByToUser")
+  Report                               Report[]
+}
