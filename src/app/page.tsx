@@ -134,6 +134,22 @@ function Dashboard() {
   const queryClient = useQueryClient()
   const { toast } = useToast()
 
+  // Role-based permission checks
+  const isAdmin = user?.role === 'ADMIN'
+  const isManager = user?.role === 'MANAGER' || isAdmin
+  const isDeveloper = user?.role === 'DEVELOPER' || isManager
+
+  // Permission helpers
+  const canManageUsers = isAdmin
+  const canManageGames = isManager
+  const canManagePurchases = isManager
+  const canManageServers = isAdmin
+  const canManageReports = isManager
+  const canManageBugs = isDeveloper
+  const canViewPurchases = isManager
+  const canViewServers = isManager
+  const canViewReports = isManager
+
   // Fetch dashboard overview
   const { data: overview, isLoading: overviewLoading } = useQuery({
     queryKey: ['dashboard', 'overview'],
@@ -277,14 +293,20 @@ function Dashboard() {
   }
 
   const menuItems = [
-    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { id: 'players', label: 'Players', icon: Users },
-    { id: 'games', label: 'Games', icon: Gamepad2 },
-    { id: 'purchases', label: 'Purchases', icon: ShoppingCart },
-    { id: 'servers', label: 'Servers', icon: Server },
-    { id: 'bugs', label: 'Bug Reports', icon: Bug },
-    { id: 'reports', label: 'Reports', icon: FileText },
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard, roles: ['ADMIN', 'MANAGER', 'DEVELOPER'] },
+    { id: 'users', label: 'Users', icon: Users, roles: ['ADMIN'] },
+    { id: 'players', label: 'Players', icon: Users, roles: ['ADMIN', 'MANAGER', 'DEVELOPER'] },
+    { id: 'games', label: 'Games', icon: Gamepad2, roles: ['ADMIN', 'MANAGER', 'DEVELOPER'] },
+    { id: 'purchases', label: 'Purchases', icon: ShoppingCart, roles: ['ADMIN', 'MANAGER'] },
+    { id: 'servers', label: 'Servers', icon: Server, roles: ['ADMIN', 'MANAGER'] },
+    { id: 'bugs', label: 'Bug Reports', icon: Bug, roles: ['ADMIN', 'MANAGER', 'DEVELOPER'] },
+    { id: 'reports', label: 'Reports', icon: FileText, roles: ['ADMIN', 'MANAGER'] },
   ]
+
+  // Filter menu items based on user role
+  const visibleMenuItems = menuItems.filter(item => 
+    user?.role && item.roles.includes(user.role)
+  )
 
   return (
     <div className="min-h-screen flex bg-muted/30">
@@ -303,7 +325,7 @@ function Dashboard() {
         </div>
         
         <nav className="flex-1 p-2">
-          {menuItems.map((item) => (
+          {visibleMenuItems.map((item) => (
             <Button
               key={item.id}
               variant={activeTab === item.id ? 'secondary' : 'ghost'}
@@ -334,7 +356,7 @@ function Dashboard() {
         <header className="bg-card border-b px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <h1 className="text-xl font-semibold">
-              {menuItems.find(item => item.id === activeTab)?.label}
+              {visibleMenuItems.find(item => item.id === activeTab)?.label}
             </h1>
           </div>
           <div className="flex items-center gap-4">
@@ -600,6 +622,7 @@ function Dashboard() {
               playersData={playersData} 
               isLoading={playersLoading}
               getStatusColor={getStatusColor}
+              canManage={isManager}
             />
           )}
 
@@ -609,26 +632,31 @@ function Dashboard() {
               games={games} 
               isLoading={gamesLoading}
               getStatusColor={getStatusColor}
+              canManage={canManageGames}
+              queryClient={queryClient}
+              toast={toast}
             />
           )}
 
           {/* Purchases Tab */}
-          {activeTab === 'purchases' && (
+          {activeTab === 'purchases' && canViewPurchases && (
             <PurchasesTab 
               purchasesData={purchasesData}
               isLoading={purchasesLoading}
               getStatusColor={getStatusColor}
               queryClient={queryClient}
+              canManage={canManagePurchases}
             />
           )}
 
           {/* Servers Tab */}
-          {activeTab === 'servers' && (
+          {activeTab === 'servers' && canViewServers && (
             <ServersTab 
               servers={servers}
               isLoading={serversLoading}
               getStatusColor={getStatusColor}
               queryClient={queryClient}
+              canManage={canManageServers}
             />
           )}
 
@@ -643,14 +671,24 @@ function Dashboard() {
               users={users}
               queryClient={queryClient}
               toast={toast}
+              canManage={canManageBugs}
             />
           )}
 
           {/* Reports Tab */}
-          {activeTab === 'reports' && (
+          {activeTab === 'reports' && canViewReports && (
             <ReportsTab 
               reportsData={reportsData}
               isLoading={reportsLoading}
+              queryClient={queryClient}
+              toast={toast}
+              canGenerate={canManageReports}
+            />
+          )}
+
+          {/* Users Tab */}
+          {activeTab === 'users' && canManageUsers && (
+            <UsersTab 
               queryClient={queryClient}
               toast={toast}
             />
@@ -662,10 +700,11 @@ function Dashboard() {
 }
 
 // Players Tab Component
-function PlayersTab({ playersData, isLoading, getStatusColor }: {
+function PlayersTab({ playersData, isLoading, getStatusColor, canManage }: {
   playersData: { players: unknown[]; total: number } | undefined
   isLoading: boolean
   getStatusColor: (status: string) => string
+  canManage: boolean
 }) {
   const [search, setSearch] = useState('')
 
@@ -758,11 +797,61 @@ function PlayersTab({ playersData, isLoading, getStatusColor }: {
 }
 
 // Games Tab Component
-function GamesTab({ games, isLoading, getStatusColor }: {
+function GamesTab({ games, isLoading, getStatusColor, canManage, queryClient, toast }: {
   games: unknown[] | undefined
   isLoading: boolean
   getStatusColor: (status: string) => string
+  canManage: boolean
+  queryClient: ReturnType<typeof useQueryClient>
+  toast: ReturnType<typeof useToast>['toast']
 }) {
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [selectedGame, setSelectedGame] = useState<{
+    id: string
+    title: string
+    genre: string
+    status: string
+    playerCount: number
+  } | null>(null)
+
+  const updateGameMutation = useMutation({
+    mutationFn: async (data: { id: string; title: string; genre: string; status: string; playerCount: number }) => {
+      const res = await fetch(`/api/games/${data.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      })
+      if (!res.ok) throw new Error('Failed to update game')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['games'] })
+      setEditDialogOpen(false)
+      setSelectedGame(null)
+      toast({ title: 'Game updated successfully' })
+    },
+    onError: () => {
+      toast({ title: 'Failed to update game', variant: 'destructive' })
+    }
+  })
+
+  const handleEditGame = (game: unknown) => {
+    const g = game as {
+      id: string
+      title: string
+      genre: string
+      status: string
+      playerCount: number
+    }
+    setSelectedGame({
+      id: g.id,
+      title: g.title,
+      genre: g.genre,
+      status: g.status,
+      playerCount: g.playerCount
+    })
+    setEditDialogOpen(true)
+  }
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -797,9 +886,16 @@ function GamesTab({ games, isLoading, getStatusColor }: {
                       <CardTitle className="text-lg">{g.title}</CardTitle>
                       <CardDescription>{g.genre}</CardDescription>
                     </div>
-                    <Badge className={`${getStatusColor(g.status)} text-white`}>
-                      {g.status}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge className={`${getStatusColor(g.status)} text-white`}>
+                        {g.status}
+                      </Badge>
+                      {canManage && (
+                        <Button variant="ghost" size="icon" onClick={() => handleEditGame(g)} title="Edit">
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
                 <CardContent>
@@ -829,16 +925,77 @@ function GamesTab({ games, isLoading, getStatusColor }: {
           })
         )}
       </div>
+
+      {/* Edit Game Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Game</DialogTitle>
+            <DialogDescription>Update game details</DialogDescription>
+          </DialogHeader>
+          {selectedGame && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Title</Label>
+                <Input
+                  value={selectedGame.title}
+                  onChange={(e) => setSelectedGame({ ...selectedGame, title: e.target.value })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Genre</Label>
+                  <Input
+                    value={selectedGame.genre}
+                    onChange={(e) => setSelectedGame({ ...selectedGame, genre: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <Select value={selectedGame.status} onValueChange={(v) => setSelectedGame({ ...selectedGame, status: v })}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ACTIVE">Active</SelectItem>
+                      <SelectItem value="MAINTENANCE">Maintenance</SelectItem>
+                      <SelectItem value="DEPRECATED">Deprecated</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Player Count</Label>
+                <Input
+                  type="number"
+                  value={selectedGame.playerCount}
+                  onChange={(e) => setSelectedGame({ ...selectedGame, playerCount: parseInt(e.target.value) || 0 })}
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+            <Button 
+              onClick={() => selectedGame && updateGameMutation.mutate(selectedGame)}
+              disabled={updateGameMutation.isPending}
+            >
+              {updateGameMutation.isPending ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
 // Purchases Tab Component
-function PurchasesTab({ purchasesData, isLoading, getStatusColor }: {
+function PurchasesTab({ purchasesData, isLoading, getStatusColor, queryClient, canManage }: {
   purchasesData: { purchases: unknown[]; total: number } | undefined
   isLoading: boolean
   getStatusColor: (status: string) => string
   queryClient: ReturnType<typeof useQueryClient>
+  canManage: boolean
 }) {
   const [filterType, setFilterType] = useState('all')
 
@@ -973,11 +1130,12 @@ function PurchasesTab({ purchasesData, isLoading, getStatusColor }: {
 }
 
 // Servers Tab Component
-function ServersTab({ servers, isLoading, getStatusColor }: {
+function ServersTab({ servers, isLoading, getStatusColor, queryClient, canManage }: {
   servers: unknown[] | undefined
   isLoading: boolean
   getStatusColor: (status: string) => string
   queryClient: ReturnType<typeof useQueryClient>
+  canManage: boolean
 }) {
   return (
     <div className="space-y-6">
@@ -1062,7 +1220,7 @@ function ServersTab({ servers, isLoading, getStatusColor }: {
 }
 
 // Bugs Tab Component
-function BugsTab({ bugsData, isLoading, getStatusColor, getSeverityColor, games, users, queryClient, toast }: {
+function BugsTab({ bugsData, isLoading, getStatusColor, getSeverityColor, games, users, queryClient, toast, canManage }: {
   bugsData: { bugs: unknown[]; total: number } | undefined
   isLoading: boolean
   getStatusColor: (status: string) => string
@@ -1071,6 +1229,7 @@ function BugsTab({ bugsData, isLoading, getStatusColor, getSeverityColor, games,
   users: unknown[] | undefined
   queryClient: ReturnType<typeof useQueryClient>
   toast: ReturnType<typeof useToast>['toast']
+  canManage: boolean
 }) {
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterSeverity, setFilterSeverity] = useState('all')
@@ -1208,13 +1367,14 @@ function BugsTab({ bugsData, isLoading, getStatusColor, getSeverityColor, games,
             </SelectContent>
           </Select>
         </div>
-        <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              New Bug Report
-            </Button>
-          </DialogTrigger>
+        {canManage && (
+          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                New Bug Report
+              </Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create Bug Report</DialogTitle>
@@ -1297,6 +1457,7 @@ function BugsTab({ bugsData, isLoading, getStatusColor, getSeverityColor, games,
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        )}
       </div>
 
       <Card>
@@ -1353,33 +1514,41 @@ function BugsTab({ bugsData, isLoading, getStatusColor, getSeverityColor, games,
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Select
-                            value={b.status}
-                            onValueChange={(v) => updateBugStatusMutation.mutate({ id: b.id, status: v })}
-                          >
-                            <SelectTrigger className="w-[130px] h-8">
-                              <Badge className={`${getStatusColor(b.status)} text-white`}>
-                                {b.status.replace('_', ' ')}
-                              </Badge>
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="OPEN">Open</SelectItem>
-                              <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
-                              <SelectItem value="RESOLVED">Resolved</SelectItem>
-                              <SelectItem value="CLOSED">Closed</SelectItem>
-                            </SelectContent>
-                          </Select>
+                          {canManage ? (
+                            <Select
+                              value={b.status}
+                              onValueChange={(v) => updateBugStatusMutation.mutate({ id: b.id, status: v })}
+                            >
+                              <SelectTrigger className="w-[130px] h-8">
+                                <Badge className={`${getStatusColor(b.status)} text-white`}>
+                                  {b.status.replace('_', ' ')}
+                                </Badge>
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="OPEN">Open</SelectItem>
+                                <SelectItem value="IN_PROGRESS">In Progress</SelectItem>
+                                <SelectItem value="RESOLVED">Resolved</SelectItem>
+                                <SelectItem value="CLOSED">Closed</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <Badge className={`${getStatusColor(b.status)} text-white`}>
+                              {b.status.replace('_', ' ')}
+                            </Badge>
+                          )}
                         </TableCell>
                         <TableCell>{b.game?.title || 'N/A'}</TableCell>
                         <TableCell>{b.reporter?.name || b.reporter?.email || 'Unknown'}</TableCell>
                         <TableCell>{b.assignee?.name || b.assignee?.email || 'Unassigned'}</TableCell>
                         <TableCell>{new Date(b.createdAt).toLocaleDateString()}</TableCell>
                         <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => handleEditBug(b)} title="Edit">
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                          </div>
+                          {canManage && (
+                            <div className="flex items-center gap-1">
+                              <Button variant="ghost" size="icon" onClick={() => handleEditBug(b)} title="Edit">
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          )}
                         </TableCell>
                       </TableRow>
                     )
@@ -1509,11 +1678,12 @@ function BugsTab({ bugsData, isLoading, getStatusColor, getSeverityColor, games,
 }
 
 // Reports Tab Component
-function ReportsTab({ reportsData, isLoading, queryClient, toast }: {
+function ReportsTab({ reportsData, isLoading, queryClient, toast, canGenerate }: {
   reportsData: { reports: unknown[]; total: number } | undefined
   isLoading: boolean
   queryClient: ReturnType<typeof useQueryClient>
   toast: ReturnType<typeof useToast>['toast']
+  canGenerate: boolean
 }) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
@@ -1803,13 +1973,14 @@ function ReportsTab({ reportsData, isLoading, queryClient, toast }: {
             Export Monthly CSV
           </Button>
         </div>
-        <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-          <DialogTrigger asChild>
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
-              Generate Report
-            </Button>
-          </DialogTrigger>
+        {canGenerate && (
+          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>
+                <Plus className="h-4 w-4 mr-2" />
+                Generate Report
+              </Button>
+            </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Generate Report</DialogTitle>
@@ -1860,6 +2031,7 @@ function ReportsTab({ reportsData, isLoading, queryClient, toast }: {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        )}
       </div>
 
       {/* Report History */}
@@ -1972,6 +2144,335 @@ function ReportsTab({ reportsData, isLoading, queryClient, toast }: {
                 Export
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+// Users Tab Component
+function UsersTab({ queryClient, toast }: {
+  queryClient: ReturnType<typeof useQueryClient>
+  toast: ReturnType<typeof useToast>['toast']
+}) {
+  const [addDialogOpen, setAddDialogOpen] = useState(false)
+  const [editDialogOpen, setEditDialogOpen] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [selectedUser, setSelectedUser] = useState<{
+    id: string
+    email: string
+    name: string
+    role: string
+  } | null>(null)
+  const [newUser, setNewUser] = useState({
+    email: '',
+    password: '',
+    name: '',
+    role: 'DEVELOPER'
+  })
+
+  // Fetch users
+  const { data: users, isLoading } = useQuery({
+    queryKey: ['users'],
+    queryFn: async () => {
+      const res = await fetch('/api/users')
+      if (!res.ok) throw new Error('Failed to fetch users')
+      return res.json()
+    }
+  })
+
+  // Create user mutation
+  const createUserMutation = useMutation({
+    mutationFn: async (data: typeof newUser) => {
+      const res = await fetch('/api/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      })
+      if (!res.ok) {
+        const error = await res.json()
+        throw new Error(error.error || 'Failed to create user')
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      setAddDialogOpen(false)
+      setNewUser({ email: '', password: '', name: '', role: 'DEVELOPER' })
+      toast({ title: 'User created successfully' })
+    },
+    onError: (error: Error) => {
+      toast({ title: error.message, variant: 'destructive' })
+    }
+  })
+
+  // Update user mutation
+  const updateUserMutation = useMutation({
+    mutationFn: async (data: { id: string; email: string; name: string; role: string; password?: string }) => {
+      const res = await fetch(`/api/users/${data.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      })
+      if (!res.ok) throw new Error('Failed to update user')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      setEditDialogOpen(false)
+      setSelectedUser(null)
+      toast({ title: 'User updated successfully' })
+    },
+    onError: () => {
+      toast({ title: 'Failed to update user', variant: 'destructive' })
+    }
+  })
+
+  // Delete user mutation
+  const deleteUserMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/users/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error('Failed to delete user')
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      setDeleteDialogOpen(false)
+      setSelectedUser(null)
+      toast({ title: 'User deleted successfully' })
+    },
+    onError: () => {
+      toast({ title: 'Failed to delete user', variant: 'destructive' })
+    }
+  })
+
+  const getRoleBadgeColor = (role: string) => {
+    switch (role) {
+      case 'ADMIN':
+        return 'bg-red-500'
+      case 'MANAGER':
+        return 'bg-blue-500'
+      case 'DEVELOPER':
+        return 'bg-green-500'
+      default:
+        return 'bg-gray-500'
+    }
+  }
+
+  const handleEditUser = (user: { id: string; email: string; name: string; role: string }) => {
+    setSelectedUser(user)
+    setEditDialogOpen(true)
+  }
+
+  const handleDeleteUser = (user: { id: string; email: string; name: string; role: string }) => {
+    setSelectedUser(user)
+    setDeleteDialogOpen(true)
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Manage System Users</h2>
+        <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="h-4 w-4 mr-2" />
+              Add User
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add New User</DialogTitle>
+              <DialogDescription>Create a new system user account</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Email</Label>
+                <Input
+                  type="email"
+                  value={newUser.email}
+                  onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                  placeholder="user@example.com"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  value={newUser.password}
+                  onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                  placeholder="Enter password"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  value={newUser.name}
+                  onChange={(e) => setNewUser({ ...newUser, name: e.target.value })}
+                  placeholder="Full name (optional)"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <Select value={newUser.role} onValueChange={(v) => setNewUser({ ...newUser, role: v })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ADMIN">Admin</SelectItem>
+                    <SelectItem value="MANAGER">Manager</SelectItem>
+                    <SelectItem value="DEVELOPER">Developer</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
+              <Button
+                onClick={() => createUserMutation.mutate(newUser)}
+                disabled={createUserMutation.isPending || !newUser.email || !newUser.password}
+              >
+                {createUserMutation.isPending ? 'Creating...' : 'Create User'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          <ScrollArea className="h-[500px]">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <TableRow key={i}>
+                      {Array.from({ length: 5 }).map((_, j) => (
+                        <TableCell key={j}>
+                          <div className="h-4 bg-muted animate-pulse rounded" />
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  users?.map((u: { id: string; email: string; name: string; role: string; createdAt: string }) => (
+                    <TableRow key={u.id}>
+                      <TableCell className="font-medium">{u.name || '-'}</TableCell>
+                      <TableCell>{u.email}</TableCell>
+                      <TableCell>
+                        <Badge className={`${getRoleBadgeColor(u.role)} text-white`}>
+                          {u.role}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{new Date(u.createdAt).toLocaleDateString()}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleEditUser(u)}
+                            title="Edit User"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeleteUser(u)}
+                            title="Delete User"
+                            className="text-red-500 hover:text-red-600"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </ScrollArea>
+        </CardContent>
+      </Card>
+
+      {/* Edit User Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit User</DialogTitle>
+            <DialogDescription>Update user details</DialogDescription>
+          </DialogHeader>
+          {selectedUser && (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Email</Label>
+                <Input
+                  value={selectedUser.email}
+                  onChange={(e) => setSelectedUser({ ...selectedUser, email: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  value={selectedUser.name}
+                  onChange={(e) => setSelectedUser({ ...selectedUser, name: e.target.value })}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <Select value={selectedUser.role} onValueChange={(v) => setSelectedUser({ ...selectedUser, role: v })}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ADMIN">Admin</SelectItem>
+                    <SelectItem value="MANAGER">Manager</SelectItem>
+                    <SelectItem value="DEVELOPER">Developer</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>Cancel</Button>
+            <Button
+              onClick={() => selectedUser && updateUserMutation.mutate(selectedUser)}
+              disabled={updateUserMutation.isPending}
+            >
+              {updateUserMutation.isPending ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete User</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete &quot;{selectedUser?.name || selectedUser?.email}&quot;? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => selectedUser && deleteUserMutation.mutate(selectedUser.id)}
+              disabled={deleteUserMutation.isPending}
+            >
+              {deleteUserMutation.isPending ? 'Deleting...' : 'Delete User'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
